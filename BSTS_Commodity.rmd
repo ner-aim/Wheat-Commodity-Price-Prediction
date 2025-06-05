@@ -1,0 +1,197 @@
+---
+title: "Commodity BSTS"
+output: html_document
+---
+
+As part of data exploration (not in this file) we determined the 20 columns with the highest correlation with wheat (> 0.8). Below is the list of them.
+
+**Note:** the numbers 1-61 are for that column's number in the original data set and will be used in the pre-processing phase, for subsetting
+
+**Note:** this data set is taken from github so there is no need to download the file locally
+
+They are: 
+
+'Date', 1
+'Wheat', 61 (target feature)
+'Food Price Index', 5
+'Food and Beverage Price Index', 4
+'Maize corn', 31
+'Soybeans', 53
+'Non-Fuel Price Index', 3
+'Soybean Oil', 52
+'Barley', 14
+'Rapeseed oil', 20
+'All Commodity Price Index', 2
+'Soybean Meal', 51
+'Palm oil', 42
+'Coal', 16
+'Fuel Energy Index', 10
+'Lead', 28
+'Crude Oil - petroleum - Dated Brent light blend', 37
+'Oil Dubai', 38
+'Crude Oil petroleum', 11
+'Crude Oil - petroleum-simple average of three spot prices', 36
+'Tin' 59
+
+### Import Data, Subset Columns, Pre-processing, & Assign Train & Test
+```{r}
+
+rm(list = ls())
+
+require(bsts)
+require(Boom)
+
+commodity <- read.csv("https://github.com/datasets/commodity-prices/raw/master/data/commodity-prices.csv", header = TRUE)
+
+# SUBSET THE HIGHLY CORRELATED FEATURES
+commodity <- commodity[, c(1, 61, 31, 53, 52, 14, 20, 51, 42, 5, 3, 2, 10, 4, 16, 59, 37, 38, 11, 36)]
+
+# DEFINE THE DATE AS TIME INDEX
+commodity$Date <- as.Date(commodity$Date)
+
+#RENAMING PART 1
+newnames <- c("date", "wheat", "maize", "soybeans", "soybean.oil", "barley", "rapeseed.oil", "soybean.meal", "palm.oil",
+              "food.price.idx", "non.fuel.price.idx", "all.commodity.price.idx", "fuel.energy.idx", "food.bev.price.idx", "coal",
+              "tin", "brent", "oil.dubai", "oil.petroleum", "oil.avg")
+
+#RENAMING PART 2
+names(commodity) <-newnames
+
+
+
+#REMOVE NAS
+commodity <- na.omit(commodity) #; nrow(commodity) # 290 rows
+
+train <- commodity[1:203,] ; test <- commodity[204:290,]
+
+```
+
+### Calculate Test & Train After Omitting NA's
+Performing a 70:30 split on 290 rows 
+```{r}
+
+# TRAIN 203, TEST 87
+  # we did this calculation and then applied it to the chunk above for splitting the train and test
+print(c(round(290*.7, 0), 290-round(290*.7, 0) ))
+
+
+```
+
+
+
+### BSTS Models
+
+*Wheat ~ all*
+
+We already know from Python sources there is seasonality and a cyclic nature in all the commodities. We can use parameter **expected.model.size** to find out if one or more features has a greater influence on Wheat  Let's aim for the top 1, 2, 3 where
+
+**model1** seeks the most influential commodity using bsts
+
+**model2** seeks the two most influential commodities using bsts
+
+**model3** seeks the three most influential commodities using bsts
+
+```{r}
+nseasons <- 12
+ss <- list()
+ss <- AddLocalLinearTrend(ss, y=commodity$wheat)
+ss <- AddSeasonal(ss, commodity$wheat, nseasons = nseasons)
+
+# Exp Model Size =1
+model1 = bsts(wheat ~., state.specification = ss, data=train, niter=1000, ping=0, expected.model.size=1)
+
+# Exp Model Size =2
+model2 = bsts(wheat ~., state.specification = ss, data=train, niter=1000, ping=0, expected.model.size=2)
+
+# Exp Model Size =3
+model3 = bsts(wheat ~., state.specification = ss, data=train, niter=1000, ping=0, expected.model.size=3)
+
+```
+
+### Coefficient Analysis
+
+For **Model1** the *coal* feature technically has the highest significance but its beta is negative. For this model, it appears that no beta is positive
+
+For **Model2** the *soybeans, palm oil, food & beverage price index, all commodity index* features have the highest significance. Soybeans & food/bev price index have negative betas. Palm oil & all commodity price index have positive betas.
+
+For **Model3** the *food price index, maize, petroleum, and oil-average* features have the highest significance. Food price index have negative betas while the rest have positive betas. Note the "oil.avg" column represents the average of the princes for Dated Brent, West Texas, and Dubai oil, representing several european nations, the U.S, and Dubai.
+
+
+```{r}
+model1_coeff <- plot(model1, "coefficients", main="Model 1 Coeff Significance") #; model1_coeff
+
+model2_coeff <- plot(model2, "coefficients", main="Model 2 Coeff Significance") #; model2_coeff
+
+model3_coeff <- plot(model3, "coefficients", main="Model 3 Coeff Significance") #; model3_coeff
+
+```
+
+### Forecasting Model 1
+```{r}
+m1_pred <- predict(model1, newdata = test, horizon= 28)
+
+#plot(m2_pred, plot.original=90,
+#     main="Model 1 Forecasting", xlab="time_index [ ]", ylab= "Wheat Price")
+
+
+
+```
+
+### Forecasting Model2
+```{r}
+m2_pred <- predict(model2, newdata = test, horizon= 28)
+
+#plot(m2_pred, plot.original=90,
+#     main="Model 2 Forecasting", xlab="time_index [ ]", ylab= "Wheat Price")
+
+```
+
+### Forecasting Model3
+```{r}
+
+m3_pred <- predict(model3, newdata = test, horizon= 28)
+
+#plot(m3_pred, plot.original=90,
+#     main="Model 3 Forecasting", xlab="time_index [ ]", ylab= "Wheat Price")
+
+```
+
+All three forecasts have increasing wide confidence intervals, with Model 3 having the widest. This issue could be improved with a greater sample size to reduce variability (at 95% confidence)
+
+### BSTS One Step Ahead
+```{r}
+# Model 1
+m1_errors <-bsts.prediction.errors(model1, cutpoints = 9, burn = SuggestBurn(.1, model1), standardize = FALSE)
+summary1 <- summary(model1, burn = SuggestBurn(.1, model1))
+
+
+# Model 2
+m2_errors <-bsts.prediction.errors(model2, cutpoints = 9, burn = SuggestBurn(.1, model2), standardize = FALSE)
+summary2 <- summary(model2, burn = SuggestBurn(.1, model2))
+
+
+# Model 3
+m3_errors <-bsts.prediction.errors(model3, cutpoints = 9, burn = SuggestBurn(.1, model3), standardize = FALSE)
+summary3 <- summary(model3, burn = SuggestBurn(.1, model3))
+
+```
+
+```{r}
+PlotDynamicDistribution(m1_errors$in.sample)
+
+PlotDynamicDistribution(m2_errors$in.sample)
+
+PlotDynamicDistribution(m3_errors$in.sample)
+```
+
+### RMSE Calculations
+RMSE =  sqrt(mean ( ( y_actual-y_predicted)^2))
+```{r}
+rmse1 <- sqrt(mean((m1_errors$in.sample)^2)) 
+
+rmse2 <- sqrt(mean((m2_errors$in.sample)^2)) 
+
+rmse3 <- sqrt(mean((m3_errors$in.sample)^2)) 
+
+print(paste("Model 1 RMSE: ", rmse1,"Model 2 RMSE: ", rmse2,"Model 3 RMSE: ", rmse3))
+```
